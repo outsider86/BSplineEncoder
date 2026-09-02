@@ -42,7 +42,7 @@ test = [
 spline-encode = "spline_encoder.cli:main"
 
 [project.urls]
-Repository = "https://github.com/outsider86/SplineEncoder"
+Repository = "https://github.com/outsider86/BSplineEncoder"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/spline_encoder"]

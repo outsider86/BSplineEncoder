@@ -1,6 +1,6 @@
-# SplineEncoder
+# BSplineEncoder
 
-SplineEncoder is an independent, framework-neutral Python package that turns
+BSplineEncoder is an independent, framework-neutral Python package that turns
 robot action chunks into observation-aligned B-spline parameters. Continuous
 control points and knots are the primary representation; 256-bin (or custom)
 quantization is an optional final step.
@@ -13,8 +13,8 @@ dRTCv2 tokenizer contracts, including the Piper 50 Hz presets and legacy
 ## Install
 
 ```bash
-git clone https://github.com/outsider86/SplineEncoder.git
-cd SplineEncoder
+git clone https://github.com/outsider86/BSplineEncoder.git
+cd BSplineEncoder
 pip install -e ".[lerobot]"
 ```
 
