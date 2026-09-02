@@ -1,0 +1,82 @@
+{
+  "dataset": "/scratch/wangpc/dRTCv2/data/20260818_piper_pick_white_block_50hz",
+  "dataset_codebase_version": "v2.1",
+  "dataset_fps": 50.0,
+  "elapsed_seconds": 135.79770827293396,
+  "episodes": 52,
+  "modes": [
+    {
+      "cache_key_mismatches": 0,
+      "cache_mask_false_count": 0,
+      "cache_records": 34254,
+      "continuous_control_max_abs_difference": 0.0,
+      "dequantized_decode_max_abs_difference": 1.27675647831893e-15,
+      "knot_max_abs_difference": 0.0,
+      "mode": "uniform_double",
+      "new_vs_cache_token_mismatches": 0,
+      "new_vs_original_token_mismatches": 0,
+      "original_tokenizer_id": "b2211e5e8b95d867",
+      "passed": true,
+      "records": 34254,
+      "tokenizer_id": "b2211e5e8b95d867"
+    },
+    {
+      "cache_key_mismatches": 0,
+      "cache_mask_false_count": 0,
+      "cache_records": 34254,
+      "continuous_control_max_abs_difference": 0.0,
+      "dequantized_decode_max_abs_difference": 0.0,
+      "knot_max_abs_difference": 0.0,
+      "mode": "uniform_left",
+      "new_vs_cache_token_mismatches": 0,
+      "new_vs_original_token_mismatches": 0,
+      "original_tokenizer_id": "3f7924fa97a514c5",
+      "passed": true,
+      "records": 34254,
+      "tokenizer_id": "3f7924fa97a514c5"
+    },
+    {
+      "cache_key_mismatches": 0,
+      "cache_mask_false_count": 0,
+      "cache_records": 34254,
+      "continuous_control_max_abs_difference": 0.0,
+      "dequantized_decode_max_abs_difference": 9.325873406851315e-15,
+      "duration_mismatches": 0,
+      "knot_max_abs_difference": 0.0,
+      "mode": "adaptive_left",
+      "new_vs_cache_duration_mismatches": 0,
+      "new_vs_cache_token_mismatches": 0,
+      "new_vs_original_token_mismatches": 0,
+      "original_tokenizer_id": "88cf71f30492871b",
+      "passed": true,
+      "records": 34254,
+      "tokenizer_id": "88cf71f30492871b"
+    }
+  ],
+  "normalization": {
+    "action_indices": null,
+    "action_key": "action",
+    "clip": true,
+    "high": [
+      1.6672606468200684,
+      2.106769561767578,
+      -0.004660028964281082,
+      0.1808684766292572,
+      1.2071774208545687,
+      0.7780997276306171,
+      0.8410000205039978
+    ],
+    "low": [
+      -0.4103956630825996,
+      0.0018325956771150231,
+      -1.5609875917434692,
+      -0.34400439262390137,
+      0.041399210691452026,
+      -0.22659085854887961,
+      0.004999999888241291
+    ]
+  },
+  "observations": 34254,
+  "passed": true,
+  "schema_version": 1
+}
