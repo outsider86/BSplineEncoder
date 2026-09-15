@@ -31,8 +31,12 @@ lerobot = [
   "pandas>=2.0",
   "pyarrow>=12",
 ]
+visualization = [
+  "matplotlib>=3.7",
+]
 test = [
   "h5py>=3.8",
+  "matplotlib>=3.7",
   "pandas>=2.0",
   "pyarrow>=12",
   "pytest>=8",

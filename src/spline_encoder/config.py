@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
+from numbers import Integral
 from typing import Any, Literal, Mapping
 
 import numpy as np
@@ -33,8 +34,8 @@ class UniformBSplineConfig:
 
     def __post_init__(self) -> None:
         _validate_common(self)
-        if self.regularization < 0:
-            raise ValueError("regularization must be non-negative")
+        if not _is_finite(self.regularization) or self.regularization < 0:
+            raise ValueError("regularization must be finite and non-negative")
         _validate_span_layout(self)
 
     @property
@@ -63,14 +64,16 @@ class UniformDoubleBSplineConfig(UniformBSplineConfig):
 
 @dataclass(frozen=True)
 class UniformLeftBSplineConfig(UniformBSplineConfig):
-    """Left-clamped spline obtained from a longer double-clamped fit.
+    """Uniform spline clamped only at the left edge of the action chunk.
 
     The first ``num_basis - degree`` spans are executable.  The final
-    ``degree`` retained controls provide right-side basis support.  The
-    fitting-only control suffix is discarded after fitting.
+    ``degree`` spans provide right-side basis support.  The default
+    implementation fits all controls directly from the executable action
+    chunk.  The old extended-double-fit implementation remains loadable by
+    its explicit version string for serialized-artifact compatibility.
     """
 
-    implementation_version: str = "uniform_left_extended_double_fit_v1"
+    implementation_version: str = "uniform_left_direct_fit_v1"
     mode: Literal["uniform_left"] = "uniform_left"
 
     def __post_init__(self) -> None:
@@ -90,6 +93,8 @@ class UniformLeftBSplineConfig(UniformBSplineConfig):
 
     @property
     def fitting_num_spans(self) -> int:
+        if self.implementation_version == "uniform_left_direct_fit_v1":
+            return self.executable_spans
         if self.implementation_version == "uniform_left_extended_double_fit_v1":
             return self.executable_spans + self.right_context_spans
         # Preserve loadability of the historical experimental v2 artifact.
@@ -97,6 +102,8 @@ class UniformLeftBSplineConfig(UniformBSplineConfig):
 
     @property
     def fitting_num_basis(self) -> int:
+        if self.implementation_version == "uniform_left_direct_fit_v1":
+            return self.num_basis
         return self.fitting_num_spans + self.degree
 
     @property
@@ -105,7 +112,13 @@ class UniformLeftBSplineConfig(UniformBSplineConfig):
 
     @property
     def input_chunk_size(self) -> int:
+        if self.implementation_version == "uniform_left_direct_fit_v1":
+            return self.chunk_size
         return self.fitting_chunk_size
+
+    @property
+    def uses_direct_fit(self) -> bool:
+        return self.implementation_version == "uniform_left_direct_fit_v1"
 
     @property
     def support_end_step(self) -> int:
@@ -128,17 +141,41 @@ class AdaptiveBSplineConfig:
     max_duration: int = 255
     alignment_tolerance: float = 1e-8
     limit_global_knot_density: bool = True
+    knot_insertion_excluded_dimensions: tuple[int, ...] = ()
     end_padding: bool = True
     implementation_version: str = "fitpack_left_clamped_right_open_tail_refit_v5"
     mode: Literal["adaptive"] = "adaptive"
 
     def __post_init__(self) -> None:
         _validate_common(self)
+        raw_excluded = tuple(self.knot_insertion_excluded_dimensions)
+        if any(not _is_integer(index) for index in raw_excluded):
+            raise ValueError("knot_insertion_excluded_dimensions must contain integers")
+        excluded = tuple(int(index) for index in raw_excluded)
+        if len(set(excluded)) != len(excluded):
+            raise ValueError("knot_insertion_excluded_dimensions must be unique")
+        if any(index < 0 or index >= self.action_dim for index in excluded):
+            raise ValueError(
+                "knot_insertion_excluded_dimensions must index valid action dimensions"
+            )
+        if len(excluded) >= self.action_dim:
+            raise ValueError("at least one action dimension must drive adaptive knot insertion")
+        object.__setattr__(self, "knot_insertion_excluded_dimensions", excluded)
         if self.num_basis <= 2 * self.degree:
             raise ValueError("adaptive mode requires num_basis > 2 * degree")
-        if self.fit_tolerance <= 0 or self.smoothing < 0:
+        if (
+            not _is_finite(self.fit_tolerance)
+            or not _is_finite(self.smoothing)
+            or self.fit_tolerance <= 0
+            or self.smoothing < 0
+        ):
             raise ValueError("invalid adaptive fit configuration")
-        if self.max_duration < 1 or self.alignment_tolerance < 0:
+        if (
+            not _is_integer(self.max_duration)
+            or self.max_duration < 1
+            or not _is_finite(self.alignment_tolerance)
+            or self.alignment_tolerance < 0
+        ):
             raise ValueError("invalid adaptive duration configuration")
         if not self.implementation_version:
             raise ValueError("implementation_version must be nonempty")
@@ -252,7 +289,15 @@ def config_from_dict(values: Mapping[str, Any]) -> Config:
 
 
 def _validate_common(config: Any) -> None:
-    if config.action_dim < 1 or config.chunk_size < 2 or config.frequency_hz <= 0:
+    integer_fields = ("action_dim", "chunk_size", "degree", "num_basis", "vocab_size")
+    if any(not _is_integer(getattr(config, name)) for name in integer_fields):
+        raise ValueError(f"{', '.join(integer_fields)} must be integers")
+    if (
+        config.action_dim < 1
+        or config.chunk_size < 2
+        or not _is_finite(config.frequency_hz)
+        or config.frequency_hz <= 0
+    ):
         raise ValueError("action_dim, chunk_size, and frequency_hz must be positive")
     if config.degree < 1 or config.degree > 5:
         raise ValueError("degree must be between 1 and 5")
@@ -266,7 +311,7 @@ def _validate_span_layout(config: Any) -> None:
     span = config.span_length_steps
     if span is None:
         return
-    if span < 1:
+    if not _is_integer(span) or span < 1:
         raise ValueError("span_length_steps must be positive")
     if (config.num_basis - config.degree) * span != config.chunk_size:
         raise ValueError(
@@ -274,8 +319,24 @@ def _validate_span_layout(config: Any) -> None:
         )
 
 
+def _is_integer(value: Any) -> bool:
+    return isinstance(value, Integral) and not isinstance(value, (bool, np.bool_))
+
+
+def _is_finite(value: Any) -> bool:
+    try:
+        return bool(np.isfinite(value))
+    except TypeError:
+        return False
+
+
 def _fingerprint(config: Any) -> str:
-    payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
+    values = asdict(config)
+    # Preserve the validated IDs of pre-feature artifacts while ensuring a
+    # non-empty exclusion policy creates a distinct numerical tokenizer ID.
+    if not values.get("knot_insertion_excluded_dimensions"):
+        values.pop("knot_insertion_excluded_dimensions", None)
+    payload = json.dumps(values, sort_keys=True, separators=(",", ":"))
     return sha256(payload.encode()).hexdigest()[:16]
 
 

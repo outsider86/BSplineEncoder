@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,20 @@ class ControlQuantizer:
     vocab_size: int
     low: np.ndarray | None = None
     high: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.vocab_size, Integral)
+            or isinstance(self.vocab_size, (bool, np.bool_))
+            or self.vocab_size < 2
+        ):
+            raise ValueError("vocab_size must be an integer of at least 2")
+        if (self.low is None) != (self.high is None):
+            raise ValueError("low and high must be supplied together")
+        if self.low is not None:
+            low, high = self.low, self.high
+            self.low = self.high = None
+            self.set_bounds(low, high)
 
     @property
     def calibrated(self) -> bool:
@@ -34,6 +49,8 @@ class ControlQuantizer:
         if not self.calibrated:
             raise RuntimeError("quantization requires calibration")
         array = np.asarray(values, dtype=np.float64)
+        if not np.all(np.isfinite(array)):
+            raise ValueError("values to quantize must be finite")
         span = self.high - self.low
         safe = np.where(span > 0, span, 1.0)
         scaled = np.clip((array - self.low) / safe, 0.0, 1.0)

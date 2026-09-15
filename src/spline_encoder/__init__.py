@@ -25,6 +25,17 @@ from .encoder import (
     create_encoder,
     encode_action_chunk,
 )
+from .fitting import (
+    BSplineControlPointFit,
+    bspline_design_matrix,
+    evaluate_bspline,
+    fit_bspline,
+    fit_bspline_control_points,
+    fit_control_points,
+    make_clamped_knots,
+    make_uniform_clamped_knots,
+    make_uniform_left_clamped_knots,
+)
 from .lerobot import (
     ActionAlignment,
     DatasetEncodingResult,
@@ -53,6 +64,13 @@ from .subdivision import (
     subdivide,
     subdivide_parameters,
 )
+from .verification import (
+    ReconstructionMetrics,
+    reconstruction_metrics,
+    verify_reconstruction,
+    verify_spline_parameters,
+)
+from .visualization import plot_reconstruction, save_reconstruction_plot
 
 __version__ = "0.1.0"
 
@@ -61,15 +79,22 @@ __all__ = [
     "UNIFORM_MODES", "ActionAlignment", "AdaptiveBSplineConfig",
     "AdaptiveBSplineEncoder", "AdaptiveLeftBSplineConfig",
     "AdaptiveLeftBSplineEncoder", "BaseSplineEncoder", "DatasetEncodingResult",
-    "EncodedEpisode", "LeRobotEpisode", "SplineGeometry", "SplineParameters",
+    "BSplineControlPointFit", "EncodedEpisode", "LeRobotEpisode", "SplineGeometry",
+    "SplineParameters",
     "UniformBSplineConfig", "UniformBSplineEncoder", "UniformDoubleBSplineConfig",
     "UniformDoubleBSplineEncoder", "UniformLeftBSplineConfig",
     "UniformLeftBSplineEncoder", "benchmark_preset", "calibrate_from_lerobot",
-    "config_from_dict", "create_encoder", "encode_action_chunk",
+    "bspline_design_matrix", "config_from_dict", "create_encoder",
+    "encode_action_chunk", "evaluate_bspline", "fit_bspline",
+    "fit_bspline_control_points", "fit_control_points",
     "encode_lerobot_dataset", "encoder_from_state", "encoder_to_state",
     "extract_interval", "extract_left_clamped_prefix", "infer_action_bounds",
     "insert_knot", "is_adaptive_mode", "is_uniform_mode",
     "iter_encoded_episodes", "load_encoder", "load_lerobot_episodes",
-    "load_tokenizer", "preset", "save_encoder", "save_tokenizer", "subdivide",
-    "subdivide_parameters",
+    "load_tokenizer", "make_clamped_knots", "make_uniform_clamped_knots",
+    "make_uniform_left_clamped_knots",
+    "preset", "save_encoder", "save_tokenizer", "subdivide",
+    "subdivide_parameters", "ReconstructionMetrics", "plot_reconstruction",
+    "reconstruction_metrics", "save_reconstruction_plot",
+    "verify_reconstruction", "verify_spline_parameters",
 ]

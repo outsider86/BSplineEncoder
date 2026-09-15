@@ -14,6 +14,7 @@ from .config import (
     UniformBSplineConfig,
     UniformLeftBSplineConfig,
 )
+from .fitting import make_uniform_left_clamped_knots
 from .quantization import ControlQuantizer
 from .result import SplineGeometry, SplineParameters
 from .subdivision import extract_left_clamped_prefix
@@ -189,7 +190,98 @@ class UniformBSplineEncoder(BaseSplineEncoder):
 
 
 class UniformLeftBSplineEncoder(UniformBSplineEncoder):
-    """Fixed-knot left-clamped encoder with right fitting context."""
+    """Fit a left-clamped/right-open spline directly on one action chunk."""
+
+    def __init__(self, config: UniformLeftBSplineConfig, calibration: dict | None = None):
+        self.config = config
+        self.knots = make_uniform_left_clamped_knots(
+            0.0,
+            float(config.chunk_size),
+            num_basis=config.num_basis,
+            degree=config.degree,
+        )
+        fit_steps = config.chunk_size + int(config.end_padding)
+        self._fit_basis = _design(
+            np.arange(fit_steps, dtype=np.float64),
+            self.knots,
+            config.degree,
+        )
+        self.basis = _design(
+            np.arange(config.chunk_size, dtype=np.float64), self.knots, config.degree
+        )
+        regularized = (
+            self._fit_basis.T @ self._fit_basis
+            + config.regularization * np.eye(config.num_basis)
+        )
+        self._solver = np.linalg.solve(regularized, self._fit_basis.T)
+        BaseSplineEncoder.__init__(self)
+        if calibration is not None:
+            self.load_calibration(calibration)
+
+    def fit_control_points(self, actions: Any) -> np.ndarray:
+        values = _validate_actions(
+            actions, self.config.chunk_size, self.config.action_dim
+        )
+        if self.config.end_padding:
+            values = np.concatenate((values, values[-1:]), axis=0)
+        return self._solver @ values
+
+    def geometry(self) -> SplineGeometry:
+        durations = np.full(
+            self.config.num_basis, int(self.config.span_length_steps), dtype=np.int64
+        )
+        distinct = np.r_[0, np.cumsum(durations)].astype(np.int64)
+        knots = np.rint(self.knots).astype(np.int64)
+        greville = np.asarray([
+            knots[index + 1 : index + self.config.degree + 1].mean()
+            for index in range(self.config.num_basis)
+        ])
+        return SplineGeometry(
+            duration_steps=durations,
+            distinct_steps=distinct,
+            knot_steps=knots,
+            greville_steps=greville,
+            executable_spans=self.config.executable_spans,
+            right_context_spans=self.config.right_context_spans,
+            executable_end_step=self.config.chunk_size,
+            support_end_step=self.config.support_end_step,
+        )
+
+    def encode_chunk(self, actions: Any, *, quantize: bool = False) -> SplineParameters:
+        controls = self.fit_control_points(actions)
+        tokens, dequantized = self._quantized_fields(controls, quantize)
+        geometry = self.geometry()
+        return SplineParameters(
+            control_points=controls,
+            knots=self.knots * self.config.delta_t,
+            degree=self.config.degree,
+            sample_period=self.config.delta_t,
+            executable_steps=self.config.chunk_size,
+            tokenizer_id=self.tokenizer_id,
+            duration_steps=geometry.duration_steps,
+            tokens=tokens,
+            dequantized_control_points=dequantized,
+            metadata={"mode": self.config.mode,
+                      "boundary_condition": "left_clamped_right_open",
+                      "implementation_version": self.config.implementation_version},
+        )
+
+    def decode_spline(self, tokens: Any) -> BSpline:
+        return BSpline(
+            self.knots * self.config.delta_t,
+            self.decode_control_points(tokens),
+            self.config.degree,
+            extrapolate=False,
+            axis=0,
+        )
+
+    def decode(self, tokens: Any) -> np.ndarray:
+        times = np.arange(self.config.chunk_size) * self.config.delta_t
+        return np.asarray(self.decode_spline(tokens)(times), dtype=np.float64)
+
+
+class _LegacyExtendedUniformLeftBSplineEncoder(UniformLeftBSplineEncoder):
+    """Compatibility loader for the superseded extended-double-fit artifacts."""
 
     def __init__(self, config: UniformLeftBSplineConfig, calibration: dict | None = None):
         self.config = config
@@ -234,63 +326,11 @@ class UniformLeftBSplineEncoder(UniformBSplineEncoder):
             actions, self.config.fitting_chunk_size, self.config.action_dim
         )
         if not self.config.end_padding:
-            raise ValueError("uniform_left endpoint-exclusive fitting needs end_padding=True")
+            raise ValueError("legacy uniform_left fitting requires end_padding=True")
         return self._solver @ np.concatenate((values, values[-1:]), axis=0)
 
     def fit_control_points(self, actions: Any) -> np.ndarray:
         return self.fit_full_control_points(actions)[self._retained_control_indices]
-
-    def geometry(self) -> SplineGeometry:
-        durations = np.full(
-            self.config.num_basis, int(self.config.span_length_steps), dtype=np.int64
-        )
-        distinct = np.r_[0, np.cumsum(durations)].astype(np.int64)
-        knots = np.rint(self.knots).astype(np.int64)
-        greville = np.asarray([
-            knots[index + 1 : index + self.config.degree + 1].mean()
-            for index in range(self.config.num_basis)
-        ])
-        return SplineGeometry(
-            duration_steps=durations,
-            distinct_steps=distinct,
-            knot_steps=knots,
-            greville_steps=greville,
-            executable_spans=self.config.executable_spans,
-            right_context_spans=self.config.right_context_spans,
-            executable_end_step=self.config.chunk_size,
-            support_end_step=self.config.support_end_step,
-        )
-
-    def encode_chunk(self, actions: Any, *, quantize: bool = False) -> SplineParameters:
-        controls = self.fit_control_points(actions)
-        tokens, dequantized = self._quantized_fields(controls, quantize)
-        geometry = self.geometry()
-        return SplineParameters(
-            control_points=controls,
-            knots=self.knots * self.config.delta_t,
-            degree=self.config.degree,
-            sample_period=self.config.delta_t,
-            executable_steps=self.config.chunk_size,
-            tokenizer_id=self.tokenizer_id,
-            duration_steps=geometry.duration_steps,
-            tokens=tokens,
-            dequantized_control_points=dequantized,
-            metadata={"mode": self.config.mode,
-                      "boundary_condition": "left_clamped_right_open"},
-        )
-
-    def decode_spline(self, tokens: Any) -> BSpline:
-        return BSpline(
-            self.knots * self.config.delta_t,
-            self.decode_control_points(tokens),
-            self.config.degree,
-            extrapolate=False,
-            axis=0,
-        )
-
-    def decode(self, tokens: Any) -> np.ndarray:
-        times = np.arange(self.config.chunk_size) * self.config.delta_t
-        return np.asarray(self.decode_spline(tokens)(times), dtype=np.float64)
 
 
 class AdaptiveBSplineEncoder(BaseSplineEncoder):
@@ -363,6 +403,9 @@ class AdaptiveBSplineEncoder(BaseSplineEncoder):
             max_error=self.config.fit_tolerance,
             smoothing=self.config.smoothing,
             max_control_points=self.max_episode_control_points(len(values)),
+            knot_insertion_excluded_dimensions=(
+                self.config.knot_insertion_excluded_dimensions
+            ),
         )
         spline = self._refit_with_repeated_tail(fit.spline, values, timestamps)
         breaks = np.unique(spline.t)
@@ -439,7 +482,11 @@ class AdaptiveBSplineEncoder(BaseSplineEncoder):
             tokens=tokens,
             dequantized_control_points=dequantized,
             metadata={"mode": self.config.mode,
-                      "boundary_condition": "left_clamped_right_open"},
+                      "boundary_condition": "left_clamped_right_open",
+                      "policy_layout": "control_point_duration_interleaved_v1",
+                      "knot_insertion_excluded_dimensions": list(
+                          self.config.knot_insertion_excluded_dimensions
+                      )},
         )
 
     def encode_episode(self, actions: Any, *, quantize: bool = False):
@@ -498,6 +545,8 @@ AdaptiveLeftBSplineEncoder = AdaptiveBSplineEncoder
 
 def create_encoder(config: Config, calibration: dict | None = None) -> BaseSplineEncoder:
     if isinstance(config, UniformLeftBSplineConfig):
+        if not config.uses_direct_fit:
+            return _LegacyExtendedUniformLeftBSplineEncoder(config, calibration)
         return UniformLeftBSplineEncoder(config, calibration)
     if isinstance(config, UniformBSplineConfig):
         return UniformBSplineEncoder(config, calibration)

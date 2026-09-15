@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
+from numbers import Integral
 from pathlib import Path
 import shutil
 from typing import Iterable, Iterator
@@ -36,13 +37,24 @@ class ActionAlignment:
         if not self.action_key:
             raise ValueError("action_key must be nonempty")
         if self.action_indices is not None:
-            if not self.action_indices or any(index < 0 for index in self.action_indices):
+            if not self.action_indices or any(
+                not isinstance(index, Integral)
+                or isinstance(index, (bool, np.bool_))
+                or index < 0
+                for index in self.action_indices
+            ):
                 raise ValueError("action_indices must contain non-negative indices")
         if (self.low is None) != (self.high is None):
             raise ValueError("low and high must be supplied together")
         if self.low is not None:
             low, high = np.asarray(self.low), np.asarray(self.high)
-            if low.ndim != 1 or low.shape != high.shape or np.any(low > high):
+            if (
+                low.ndim != 1
+                or low.shape != high.shape
+                or not np.all(np.isfinite(low))
+                or not np.all(np.isfinite(high))
+                or np.any(low > high)
+            ):
                 raise ValueError("normalization bounds are invalid")
             if self.action_indices is not None and len(low) != len(self.action_indices):
                 raise ValueError("normalization bounds must match selected dimensions")
@@ -51,6 +63,8 @@ class ActionAlignment:
         values = np.asarray(actions, dtype=np.float64)
         if values.ndim != 2:
             raise ValueError("episode actions must have shape (steps, dimensions)")
+        if not np.all(np.isfinite(values)):
+            raise ValueError("episode actions must contain only finite values")
         if self.action_indices is not None:
             if max(self.action_indices) >= values.shape[1]:
                 raise ValueError("an action index exceeds the dataset action width")
@@ -308,6 +322,10 @@ def encode_lerobot_dataset(
             payload["duration_steps"] = np.stack(
                 [item.duration_steps for item in splines]
             )
+        if is_adaptive_mode(encoder.config.mode):
+            payload["control_duration_interleaved"] = np.stack(
+                [item.interleaved_control_durations() for item in splines]
+            )
         if quantize:
             payload["tokens"] = np.stack([item.tokens for item in splines])
             payload["dequantized_controls"] = np.stack(
@@ -332,6 +350,11 @@ def encode_lerobot_dataset(
         "record_count": record_count,
         "quantized": quantize,
         "continuous_controls": True,
+        "policy_layout": (
+            "control_point_duration_interleaved_v1"
+            if is_adaptive_mode(encoder.config.mode)
+            else "control_flat_v1"
+        ),
         "episode_path": "data/episode_{episode_index:06d}.npz",
     }
     manifest_path = target / "manifest.json"

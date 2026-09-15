@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Any, Mapping
 
 import numpy as np
@@ -41,16 +42,35 @@ class SplineParameters:
         knots = np.asarray(self.knots, dtype=np.float64)
         if controls.ndim != 2 or controls.shape[0] == 0 or controls.shape[1] == 0:
             raise ValueError("control_points must have shape (num_basis, action_dim)")
+        if (
+            not isinstance(self.degree, Integral)
+            or isinstance(self.degree, (bool, np.bool_))
+            or self.degree < 1
+            or self.degree > 5
+        ):
+            raise ValueError("degree must be an integer between 1 and 5")
         if knots.ndim != 1 or len(knots) != len(controls) + self.degree + 1:
             raise ValueError("knots must have num_basis + degree + 1 elements")
         if np.any(np.diff(knots) < 0) or not np.all(np.isfinite(knots)):
             raise ValueError("knots must be finite and nondecreasing")
         if not np.all(np.isfinite(controls)):
             raise ValueError("control_points must be finite")
-        if self.sample_period <= 0 or self.executable_steps < 1:
+        if (
+            not np.isfinite(self.sample_period)
+            or self.sample_period <= 0
+            or not isinstance(self.executable_steps, Integral)
+            or isinstance(self.executable_steps, (bool, np.bool_))
+            or self.executable_steps < 1
+        ):
             raise ValueError("sample_period and executable_steps must be positive")
+        if knots[self.degree] >= knots[len(controls)]:
+            raise ValueError("spline knot domain must have positive length")
         if self.tokens is not None and np.asarray(self.tokens).shape != controls.shape:
             raise ValueError("tokens must match control_points shape")
+        if self.tokens is not None and not np.issubdtype(
+            np.asarray(self.tokens).dtype, np.integer
+        ):
+            raise ValueError("tokens must use an integer dtype")
         if (self.dequantized_control_points is not None and
                 np.asarray(self.dequantized_control_points).shape != controls.shape):
             raise ValueError("dequantized_control_points must match controls")
@@ -98,6 +118,28 @@ class SplineParameters:
             self.degree,
             extrapolate=False,
             axis=0,
+        )
+
+    def interleaved_control_durations(self, *, dequantized: bool = False) -> FloatArray:
+        """Return adaptive rows as ``[control dimensions..., knot duration]``.
+
+        Duration row ``i`` is the integer timestep gap from distinct knot
+        ``i`` to ``i + 1``. This is the canonical
+        ``control_point_duration_interleaved_v1`` policy ordering. The lossless
+        ``control_points`` and full repeated ``knots`` remain separately
+        available on this object.
+        """
+        if self.duration_steps is None:
+            raise ValueError("fixed-knot spline has no adaptive durations to interleave")
+        if len(self.duration_steps) != self.num_basis:
+            raise ValueError("adaptive durations must match the number of control points")
+        controls = self.control_points
+        if dequantized:
+            if self.dequantized_control_points is None:
+                raise ValueError("this result has no quantized representation")
+            controls = self.dequantized_control_points
+        return np.concatenate(
+            (controls, self.duration_steps.astype(np.float64)[:, None]), axis=1
         )
 
     def decode(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -59,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vocab-size", type=int, default=256)
     parser.add_argument("--regularization", type=float, default=1e-4)
     parser.add_argument("--fit-tolerance", type=float, default=0.01)
+    parser.add_argument(
+        "--exclude-knot-dimensions",
+        type=_indices,
+        help="adaptive-only dimensions excluded from knot insertion, e.g. 6 for a gripper",
+    )
     return parser
 
 
@@ -83,15 +89,31 @@ def _custom_config(args):
         return UniformDoubleBSplineConfig(**common, regularization=args.regularization)
     if args.mode == "uniform_left":
         return UniformLeftBSplineConfig(**common, regularization=args.regularization)
-    return AdaptiveLeftBSplineConfig(**common, fit_tolerance=args.fit_tolerance)
+    return AdaptiveLeftBSplineConfig(
+        **common,
+        fit_tolerance=args.fit_tolerance,
+        knot_insertion_excluded_dimensions=args.exclude_knot_dimensions or (),
+    )
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.encoder_state:
+        if args.exclude_knot_dimensions is not None:
+            raise SystemExit(
+                "--exclude-knot-dimensions cannot override a serialized encoder state"
+            )
         encoder = load_encoder(args.encoder_state)
     elif args.preset:
-        encoder = create_encoder(preset(args.preset, args.mode))
+        config = preset(args.preset, args.mode)
+        if args.exclude_knot_dimensions is not None:
+            if args.mode not in {"adaptive", "adaptive_left"}:
+                raise SystemExit("--exclude-knot-dimensions requires an adaptive mode")
+            config = replace(
+                config,
+                knot_insertion_excluded_dimensions=args.exclude_knot_dimensions,
+            )
+        encoder = create_encoder(config)
     else:
         encoder = create_encoder(_custom_config(args))
     base_alignment = ActionAlignment(
