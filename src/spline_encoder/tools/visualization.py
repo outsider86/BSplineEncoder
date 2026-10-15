@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from .result import SplineParameters
+from ..encoding.result import SplineParameters
 
 
 def _dimensions(values: Iterable[int] | None, action_dim: int) -> tuple[int, ...]:

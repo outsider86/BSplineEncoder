@@ -1,0 +1,111 @@
+{
+  "checks": {
+    "adaptive_left: decode has executable_steps rows": true,
+    "adaptive_left: not evaluable past the executable end": true,
+    "quantization error <= half bin": true,
+    "requantization error <= half bin": true,
+    "requantized transfer needs no clipping": true,
+    "subdivision (between) order 0: continuous across cut": true,
+    "subdivision (between) order 0: pieces match source sides": true,
+    "subdivision (between) order 1: continuous across cut": true,
+    "subdivision (between) order 1: pieces match source sides": true,
+    "subdivision (between) order 2: continuous across cut": true,
+    "subdivision (between) order 2: pieces match source sides": true,
+    "subdivision (knot) order 0: continuous across cut": true,
+    "subdivision (knot) order 0: pieces match source sides": true,
+    "subdivision (knot) order 1: continuous across cut": true,
+    "subdivision (knot) order 1: pieces match source sides": true,
+    "subdivision (knot) order 2: continuous across cut": true,
+    "subdivision (knot) order 2: pieces match source sides": true,
+    "trajectory: both curves start at the fitted first sample": true,
+    "transfer (between): committed end preserved": true,
+    "transfer (between): continuous error < 1e-12": true,
+    "transfer (between): right derivatives 0..3 match": true,
+    "transfer (existing): committed end preserved": true,
+    "transfer (existing): continuous error < 1e-12": true,
+    "transfer (existing): right derivatives 0..3 match": true,
+    "uniform_double: decode has executable_steps rows": true,
+    "uniform_double: not evaluable past the executable end": true,
+    "uniform_left (direct): decode has executable_steps rows": true,
+    "uniform_left (direct): not evaluable past the executable end": true,
+    "uniform_left (legacy extended): decode has executable_steps rows": true,
+    "uniform_left (legacy extended): not evaluable past the executable end": true,
+    "vocab sweep: measured <= half bin": true
+  },
+  "episode": {
+    "frequency_hz": 20.0,
+    "length": 90,
+    "observation": 18,
+    "seed": 20261015
+  },
+  "figures": [
+    "01_reconstruction_and_fitting_error.png",
+    "01b_plot_reconstruction_uniform_left.png",
+    "02_trajectory_2d.png",
+    "03_subdivision_transfer_boundary_zoom.png",
+    "04_position_velocity_acceleration.png",
+    "05_quantization_error.png"
+  ],
+  "metrics": {
+    "adaptive_fit_error_max": 0.0009095054777219502,
+    "adaptive_quantization_error_max": 0.0012709533247168836,
+    "fit_max_abs_error[adaptive_left]": 0.0009095054777219502,
+    "fit_max_abs_error[uniform_double]": 0.0002782319529496535,
+    "fit_max_abs_error[uniform_left (direct)]": 0.00032131949201913423,
+    "fit_max_abs_error[uniform_left (legacy extended)]": 0.0002361419194291947,
+    "quantization_half_bin_max": 0.001963035805931121,
+    "quantization_vocab": 256,
+    "subdivision_one_sided_gap[between,order=0]": 5.551115123125783e-17,
+    "subdivision_one_sided_gap[between,order=1]": 2.55351295663786e-15,
+    "subdivision_one_sided_gap[between,order=2]": 1.0125233984581428e-13,
+    "subdivision_one_sided_gap[knot,order=0]": 5.421010862427522e-20,
+    "subdivision_one_sided_gap[knot,order=1]": 6.106226635438361e-16,
+    "subdivision_one_sided_gap[knot,order=2]": 1.3100631690576847e-14,
+    "subdivision_piece_jump[between,order=0]": 2.371692252312041e-20,
+    "subdivision_piece_jump[between,order=1]": 3.497202527569243e-15,
+    "subdivision_piece_jump[between,order=2]": 8.598677325721837e-14,
+    "subdivision_piece_jump[knot,order=0]": 2.710505431213761e-20,
+    "subdivision_piece_jump[knot,order=1]": 7.216449660063518e-16,
+    "subdivision_piece_jump[knot,order=2]": 1.2434497875801753e-14,
+    "trajectory_max_xy_error[adaptive_left]": 0.0009095054777219502,
+    "trajectory_max_xy_error[uniform_left (direct)]": 0.00032131949201913423,
+    "transfer_continuous_error_max": 2.220446049250313e-16,
+    "transfer_max_abs_error[between]": 1.8041124150158794e-16,
+    "transfer_max_abs_error[existing]": 4.440892098500626e-16,
+    "transfer_one_sided_derivative_gap[between]": 9.769962616701378e-15,
+    "transfer_one_sided_derivative_gap[existing]": 1.3322676295501878e-15,
+    "transfer_requantization_clipped_controls": 0,
+    "transfer_requantization_error_max": 0.0012709533247168832,
+    "vocab_sweep": {
+      "1024": {
+        "half_bin": 0.0004893197756719803,
+        "max_error": 0.00048744168052283765
+      },
+      "128": {
+        "half_bin": 0.003941528586712093,
+        "max_error": 0.003921051662723889
+      },
+      "16": {
+        "half_bin": 0.03337160870082905,
+        "max_error": 0.03328969388890757
+      },
+      "256": {
+        "half_bin": 0.001963035805931121,
+        "max_error": 0.001917958612206139
+      },
+      "32": {
+        "half_bin": 0.01614755259717535,
+        "max_error": 0.016065637785253828
+      },
+      "512": {
+        "half_bin": 0.0009795971242904811,
+        "max_error": 0.0009547352692882843
+      },
+      "64": {
+        "half_bin": 0.007945621119245013,
+        "max_error": 0.007863706307323526
+      }
+    }
+  },
+  "passed": true
+}

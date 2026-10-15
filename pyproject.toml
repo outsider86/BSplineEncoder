@@ -34,22 +34,29 @@ lerobot = [
 visualization = [
   "matplotlib>=3.7",
 ]
+piper = [
+  "opencv-python-headless>=4.8",
+  "pandas>=2.0",
+  "pyarrow>=12",
+]
 test = [
   "h5py>=3.8",
   "matplotlib>=3.7",
+  "opencv-python-headless>=4.8",
   "pandas>=2.0",
   "pyarrow>=12",
   "pytest>=8",
 ]
 
 [project.scripts]
-spline-encode = "spline_encoder.cli:main"
+spline-encode = "data.splines.cli:main"
+spline-preprocess-piper = "data.cli:main"
 
 [project.urls]
 Repository = "https://github.com/outsider86/BSplineEncoder"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/spline_encoder"]
+packages = ["src/spline_encoder", "src/data"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"

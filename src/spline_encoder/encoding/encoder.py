@@ -7,17 +7,17 @@ from typing import Any, Iterable
 import numpy as np
 from scipy.interpolate import BSpline, make_lsq_spline
 
-from .adaptive import encode_knot_durations, fit_adaptive_bspline
+from ..core.adaptive import encode_knot_durations, fit_adaptive_bspline
 from .config import (
     AdaptiveBSplineConfig,
     Config,
     UniformBSplineConfig,
     UniformLeftBSplineConfig,
 )
-from .fitting import make_uniform_left_clamped_knots
+from ..core.fitting import make_uniform_left_clamped_knots
 from .quantization import ControlQuantizer
 from .result import SplineGeometry, SplineParameters
-from .subdivision import extract_left_clamped_prefix
+from ..core.subdivision import extract_left_clamped_prefix
 
 
 def _validate_actions(actions: Any, length: int | None, dim: int) -> np.ndarray:
@@ -73,6 +73,24 @@ def _fixed_span_bases(num_basis: int, degree: int, count: int, span_steps: int):
     )
 
 
+def _check_fit_basis(fit_basis: np.ndarray, regularization: float) -> None:
+    # Without ridge regularization the cached normal-equation solver is only
+    # meaningful for a full-column-rank basis; otherwise inv/solve can return
+    # huge finite controls instead of failing.
+    if regularization == 0 and np.linalg.matrix_rank(fit_basis) < fit_basis.shape[1]:
+        raise ValueError(
+            "unregularized uniform fitting is rank deficient "
+            f"({np.linalg.matrix_rank(fit_basis)} < {fit_basis.shape[1]}); "
+            "use regularization > 0, fewer controls, or more samples"
+        )
+
+
+def _check_solver(solver: np.ndarray) -> np.ndarray:
+    if not np.all(np.isfinite(solver)):
+        raise ValueError("uniform fitting solver is not finite")
+    return solver
+
+
 class BaseSplineEncoder:
     """Shared public surface for all spline geometries."""
 
@@ -122,7 +140,8 @@ class UniformBSplineEncoder(BaseSplineEncoder):
                 config.num_basis, config.degree, config.chunk_size,
                 config.span_length_steps,
             )
-        self._solver = (
+        _check_fit_basis(self._fit_basis, config.regularization)
+        self._solver = _check_solver(
             np.linalg.inv(
                 self._fit_basis.T @ self._fit_basis
                 + config.regularization * np.eye(config.num_basis)
@@ -209,11 +228,12 @@ class UniformLeftBSplineEncoder(UniformBSplineEncoder):
         self.basis = _design(
             np.arange(config.chunk_size, dtype=np.float64), self.knots, config.degree
         )
+        _check_fit_basis(self._fit_basis, config.regularization)
         regularized = (
             self._fit_basis.T @ self._fit_basis
             + config.regularization * np.eye(config.num_basis)
         )
-        self._solver = np.linalg.solve(regularized, self._fit_basis.T)
+        self._solver = _check_solver(np.linalg.solve(regularized, self._fit_basis.T))
         BaseSplineEncoder.__init__(self)
         if calibration is not None:
             self.load_calibration(calibration)
@@ -307,11 +327,12 @@ class _LegacyExtendedUniformLeftBSplineEncoder(UniformLeftBSplineEncoder):
         self.basis = _design(
             np.arange(config.chunk_size, dtype=np.float64), self.knots, config.degree
         )
+        _check_fit_basis(self._fit_basis, config.regularization)
         regularized = (
             self._fit_basis.T @ self._fit_basis
             + config.regularization * np.eye(config.fitting_num_basis)
         )
-        self._solver = np.linalg.solve(regularized, self._fit_basis.T)
+        self._solver = _check_solver(np.linalg.solve(regularized, self._fit_basis.T))
         self._retained_control_indices = np.arange(config.num_basis, dtype=np.int64)
         BaseSplineEncoder.__init__(self)
         if calibration is not None:

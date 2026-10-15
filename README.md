@@ -302,7 +302,10 @@ Honest limitations:
 - Native executable horizons vary. Repeating the final decoded action to fill a
   fixed tensor is a deployment convention, not an equivalent representation of
   missing future actions.
-- Episodes with at most `degree` samples cannot produce adaptive records.
+- Episodes with at most `degree` samples cannot produce adaptive records, and
+  `end_padding=False` leaves late observations without enough future knot
+  spans. Either case makes dataset export raise instead of writing a
+  misaligned sidecar.
 - Global adaptive fitting is slower than applying a cached uniform solver.
 
 ## Presets
@@ -478,19 +481,116 @@ spline-encode /datasets/piper_pick encoded_splines/piper_pick \
 Use `--quantize --calibrate` for token export, `--encoder-state` to reuse a
 saved state, and `--overwrite` only after checking the target path.
 
+## Piper raw recordings → LeRobot v2.1 → spline sidecars
+
+The `data` package turns the original Piper preprocessing scripts (kept
+unchanged in `scripts/legacy_piper/`) into one configurable pipeline:
+
+```text
+raw episode dirs (data.pkl + <camera>_image.mp4)
+  -> resample selected streams on a common target clock
+  -> state[t] / action[t or t+1] / delta t->t+1
+  -> per-episode leading-idle cleanup
+  -> LeRobot v2.1 dataset (staged, independently validated, then swapped in)
+  -> optional spline sidecar of the FINAL action column
+```
+
+Install the optional dependencies (OpenCV, pandas, PyArrow; ffmpeg must be on
+`PATH`, in `IMAGEIO_FFMPEG_EXE`, or passed with `--ffmpeg`):
+
+```bash
+pip install -e ".[piper]"
+```
+
+One command with the example config (85 `classify_blocks` episodes,
+`state-delta-joint`, both cameras, uniform-left sidecar):
+
+```bash
+# run from the repository root: relative paths in a config resolve from the working directory.
+# DATA/ (raw recordings) and outputs/ are gitignored; put your recordings under DATA/ locally.
+spline-preprocess-piper --config examples/piper_preprocess.json --dry-run  # plan only
+spline-preprocess-piper --config examples/piper_preprocess.json
+# equivalently: python -m data --config ...
+```
+
+Command-line flags override the config file and keep the names/defaults of
+`scripts/legacy_piper/preprocess_piper.py`:
+
+```bash
+spline-preprocess-piper --list-setups
+spline-preprocess-piper --raw-root DATA/classify_blocks --setup state-abs-ee \
+  --output-root outputs/piper --limit-episodes 2
+# custom spaces, a camera subset with a renamed key, and an extra observation
+spline-preprocess-piper --raw-root DATA/classify_blocks --output-root outputs/piper \
+  --state ee-last-command --action delta-ee --quaternion continuous \
+  --last-command-clock target --delta-ee-frame tool \
+  --cameras hand --camera-key hand=observation.images.wrist \
+  --extra-observation observation.joint_velocity=arm_joint_velocity
+# adaptive sidecar, quantized, calibrated on training episodes only
+spline-preprocess-piper --raw-root DATA/classify_blocks --setup state-delta-joint \
+  --output-root outputs/piper --overwrite \
+  --spline --spline-mode adaptive_left --spline-quantize --spline-validation-episodes 5
+```
+
+| Option | Choices |
+|---|---|
+| state | `joint`, `ee`, `last-command`, `joint-last-command`, `ee-last-command` |
+| action | `joint` (measured), `command`, `abs-ee` (measured), `delta-joint`, `delta-ee` |
+| action offset | `0` (t) or `1` (t+1); deltas require 1; presets keep their historical offset |
+| quaternion | `raw` or `continuous` (normalized XYZW, continuous sign, first `w >= 0`) |
+| command history clock | `raw` (previous raw robot sample, historical) or `target` |
+| delta-EE frame | `tool` (`dp=R[t]^T(p[t+1]-p[t])`, `dr=Log(R[t]^T R[t+1])`) or `base` |
+| units | `--angle-unit radian/degree`, `--position-unit meter/millimeter` |
+| cameras | any subset (default `global,hand`); none for a state/action-only dataset |
+
+Only selected cameras are opened, required, and used to bound the common time
+overlap. Delta actions carry the absolute measured gripper at `t+1`; the last
+row without a next target is dropped. Measured EE comes only from feedback,
+never from the command/FK pose in raw `actions`.
+
+Each dataset also contains `meta/episodes_stats.jsonl` (required by LeRobot
+v2.1 readers), `meta/source_episodes.jsonl`, cleanup metrics, and
+`meta/source_alignment/...` with the raw robot index, raw-clock time, and camera
+source frame of every row. A sidecar directory (default
+`<dataset>_spline_<mode>`) has the unchanged `encode_lerobot_dataset` schema
+plus `preprocessing_provenance.json` with decoding errors against the cleaned
+actions. Spline fitting treats quaternion components as independent scalars,
+so decoded `abs-ee` quaternions are not unit length; renormalize them.
+
+Verification beyond the built-in validator:
+
+```bash
+python scripts/compare_piper_preprocessing.py LEGACY_DATASET NEW_DATASET
+python scripts/validate_lerobot_encoding.py DATASET SIDECAR --output report.json
+HF_HUB_OFFLINE=1 python scripts/check_lerobot_reader.py DATASET   # env with lerobot>=0.4
+```
+
+See [`docs/preprocessing_integration.md`](docs/preprocessing_integration.md)
+for timing semantics, cleanup, outputs, compatibility evidence, and limits.
+
 ## Knot insertion and subdivision
 
 ```python
 from spline_encoder import extract_interval, insert_knot, subdivide
 
 spline = result.scipy_spline()
-refined = insert_knot(spline, value=0.5)
+refined = insert_knot(spline, value=0.5).spline   # KnotInsertion(.spline, .matrix)
 left, right = subdivide(spline, value=0.5)
 local = extract_interval(spline, left=0.2, right=0.8)
 ```
 
 Boehm knot insertion preserves the represented curve up to floating-point
-rounding. It does not preserve a quantized token layout.
+rounding. It does not preserve a quantized token layout. `extract_interval()`
+returns a zero-origin spline whose two ends both have multiplicity
+`degree + 1`, including when an end coincides with an open boundary of the
+input (for example the right end of a `uniform_left` chunk).
+
+`extract_left_clamped_prefix(spline, left, num_knot_spans=k)` returns `k`
+control/duration pairs; for degree `p` the first `k - p` spans reproduce the
+source exactly and the last duration only shapes right-side support. It
+accepts left-clamped or open-left inputs, but rejects repeated knots strictly
+inside the retained window because one duration per control cannot encode
+them.
 
 ```python
 from spline_encoder import subdivide_parameters
@@ -501,6 +601,8 @@ left_result, right_result = subdivide_parameters(result, step=25)
 High-level subdivision deliberately drops tokens because the control geometry
 changes. `subdivide_parameters()` is documented for double-clamped results;
 blind use on adaptive/left layouts does not preserve their duration metadata.
+For the inclusive layout (`span_length_steps=None`) the last valid split is
+`executable_steps - 2`, because the final native sample lies on the domain end.
 
 ## Verification and visualization
 
@@ -516,8 +618,10 @@ report = verify_reconstruction(
 ```
 
 Invariant verification checks knot/control cardinality, monotonic knots, zero
-origin, left clamping, domain coverage, partition of unity, finite decoding,
-and duration/knot round-trip where applicable.
+origin, left clamping, native-sample and full-horizon domain coverage
+(`executable_horizon_inside_domain`), partition of unity, finite decoding, and
+duration/knot round-trip where applicable. A wrong-length `duration_steps`
+vector is reported as a failed check.
 
 If `max_absolute_error` is omitted, `verify_reconstruction(...)["passed"]`
 only indicates structural invariants passed. It does not assert acceptable
@@ -551,13 +655,54 @@ python scripts/verify_chunk.py action_window.npy \
 The input must exactly match `(input_chunk_size, action_dim)`. Without
 `--max-error`, the CLI reports metrics but imposes no task-specific threshold.
 
+Deterministic, CPU-only visual verification (about 3 seconds; requires the
+`visualization` extra):
+
+```bash
+python scripts/visual_verification.py --output-dir docs/figures
+```
+
+It writes reconstruction/fitting-error panels for all four fitting procedures,
+a 2-D trajectory, suffix-to-prefix transfer overlays with a boundary zoom,
+position/velocity/acceleration comparisons at subdivision cuts, a
+quantization-error comparison, and `visual_verification_metrics.json`. Knots,
+cut times, committed intervals, units, and executable versus right-support
+regions are marked; fitting, transfer, and quantization error are plotted
+separately. The command exits non-zero if any of its numerical checks fail.
+Re-running produces byte-identical PNGs in the same environment.
+
 ## Tests and evidence
 
 ```bash
 conda run -n starVLA python -m pytest -q
+# If an editable install points at another checkout, force this one:
+PYTHONPATH=src python -m pytest -q
 ```
 
-Most recent local results on 2026-09-15:
+Review results on 2026-10-15 (commit `5aede68` plus the review changes;
+see [`docs/implementation_review.md`](docs/implementation_review.md)):
+
+- 172 tests passed and 2 were skipped as mathematically inapplicable
+  (Python 3.10.19, NumPy 1.26.4, SciPy 1.15.3); with the Piper preprocessing
+  tests the suite is now 382 passed, 2 skipped (see
+  [`docs/preprocessing_integration.md`](docs/preprocessing_integration.md));
+- basis evaluation, knot insertion, fitting, subdivision, one-sided
+  derivatives, prefix extraction, and suffix-to-prefix transfer are checked
+  against SciPy/FITPACK/LAPACK references rather than only round trips;
+- the Piper dRTCv2 parity rerun still reports zero mismatches for all 34,254
+  observations in all three modes, and a 546-array snapshot of encoder outputs
+  is bit-identical to the reviewed commit.
+
+Reproduce the compatibility snapshot:
+
+```bash
+git archive 5aede68 src | tar -x -C /tmp/baseline
+python scripts/compare_output_snapshots.py snapshot --src /tmp/baseline/src --output /tmp/base.npz
+python scripts/compare_output_snapshots.py snapshot --src src --output /tmp/new.npz
+python scripts/compare_output_snapshots.py compare /tmp/base.npz /tmp/new.npz
+```
+
+Earlier local results on 2026-09-15:
 
 - 71 BSplineEncoder tests passed;
 - 9 parent StarVLA B-spline training/deployment contract tests passed;
@@ -599,19 +744,56 @@ have unrelated optional dependencies such as `pyzmq`.
 ## Repository layout
 
 ```text
-src/spline_encoder/
-├── adaptive.py       # adaptive FITPACK fitting
-├── config.py         # configurations and presets
-├── encoder.py        # observation-aligned encoders
-├── fitting.py        # standalone control-point fitting
-├── lerobot.py        # dataset input/output
-├── quantization.py   # scalar quantization
-├── result.py         # result dataclasses
-├── serialization.py # JSON state
-├── subdivision.py    # knot insertion/subdivision
-├── verification.py  # numerical reports
-└── visualization.py # optional plots
+src/
+├── spline_encoder/          # B-spline representation; no dataset/video dependencies
+│   ├── core/                # adaptive.py, fitting.py, subdivision.py
+│   ├── encoding/            # config.py, encoder.py, result.py, quantization.py, serialization.py
+│   ├── tools/               # verification.py, visualization.py (matplotlib optional)
+│   ├── cli.py, lerobot.py   # compatibility aliases for data.splines.{cli,lerobot}
+│   ├── __init__.py          # public API (unchanged) + aliases for the old module paths
+│   └── __main__.py          # python -m spline_encoder == spline-encode
+└── data/                    # robot data processing; may import spline_encoder
+    ├── conversion/          # raw.py, media.py, episode.py, export.py (raw Piper -> LeRobot v2.1)
+    ├── transforms/          # spaces.py (quaternions, deltas, layouts, units), cleanup.py (idle)
+    ├── validation/          # dataset.py (raw vs dataset), sidecar.py (decode vs actions)
+    ├── splines/             # lerobot.py (LeRobot action I/O), sidecar.py, cli.py (spline-encode)
+    ├── config.py, pipeline.py, cli.py, __main__.py   # spline-preprocess-piper / python -m data
+scripts/                     # verification/benchmark CLIs; legacy_piper/ = original Piper scripts
+tests/  examples/  docs/
 ```
+
+The wheel installs two sibling top-level packages. `spline_encoder` owns the
+spline representation: knot vectors, fitting, subdivision, encoders,
+quantization, serialization, and verification. Its `core`, `encoding`, and
+`tools` modules never import `data`, OpenCV, pandas, or PyArrow. `data` owns
+everything dataset-specific:
+- raw Piper conversion;
+- state/action/observation transforms and idle cleanup;
+- LeRobot reading and writing;
+- dataset validation;
+- dataset-to-spline sidecars.
+
+Dependencies flow from `data` to `spline_encoder`. The only reverse references
+are the lazy compatibility aliases listed below. A future policy-inference
+package would be a third sibling under `src/`.
+
+> `data` is a generic top-level name. If a directory or module named `data`
+> sits earlier on `sys.path`, for example when running from a project root that
+> has a `data/` folder, it shadows the installed package. Run from another
+> directory, or import through the installed console scripts.
+
+Module moves (all public names and the 59 `spline_encoder.__all__` exports are
+unchanged; encoder outputs are bit-identical):
+
+| Old module | Canonical module | Old path still importable |
+|---|---|---|
+| `spline_encoder.fitting`, `.adaptive`, `.subdivision` | `spline_encoder.core.*` | yes, same module object |
+| `spline_encoder.config`, `.encoder`, `.result`, `.quantization`, `.serialization` | `spline_encoder.encoding.*` | yes, same module object |
+| `spline_encoder.verification`, `.visualization` | `spline_encoder.tools.*` | yes, same module object |
+| `spline_encoder.lerobot` | `data.splines.lerobot` | yes, alias; `from spline_encoder import encode_lerobot_dataset` etc. resolve lazily |
+| `spline_encoder.cli` (`spline-encode`) | `data.splines.cli` | yes, alias; CLI help/behaviour identical |
+| `spline_encoder.piper.*` (never released) | `data.*` (`config`, `pipeline`, `cli`, `conversion.*`, `transforms.*`, `validation.*`, `splines.sidecar`) | no; use `python -m data` / `spline-preprocess-piper` |
+| `src/data/*.py` original scripts | `scripts/legacy_piper/*.py` (byte-identical) | run as scripts, e.g. `python -B scripts/legacy_piper/preprocess_piper.py` |
 
 ## License
 
@@ -878,7 +1060,9 @@ right-context spans   = degree
 - `span_length_steps` 指导密度上限和尾部构造，不强制 adaptive duration 相等。
 - 原生可执行 horizon 会变化。重复最后一个解码动作来填满固定 tensor 是部署约定，
   不等价于样条表示了缺失的未来动作。
-- 动作数不超过 `degree` 的 episode 无法产生 adaptive 记录。
+- 动作数不超过 `degree` 的 episode 无法产生 adaptive 记录；`end_padding=False` 时末尾
+  observation 缺少足够的未来 knot span。两种情况下数据集导出都会报错，而不是写出错位的
+  sidecar。
 - 全 episode adaptive 拟合比缓存 uniform solver 更慢。
 
 ## Preset
@@ -1022,20 +1206,48 @@ spline-encode /datasets/piper_pick encoded_splines/piper_pick \
 `--quantize --calibrate` 会校准并导出 token；`--encoder-state` 复用已有 state；使用
 `--overwrite` 前必须确认路径。
 
+## Piper 原始数据 → LeRobot v2.1 → 样条 sidecar
+
+`data` 包把原始 Piper 预处理脚本（原样保存在 `scripts/legacy_piper/`）整合为一个可配置流水线：选中的
+数据流先在共同时间重叠上按最近时间戳重采样（相等时取较早样本），再构造 state[t]、
+action[t 或 t+1] 或 t→t+1 增量，然后逐 episode 去除开头静止段，导出经过独立验证的
+LeRobot v2.1 数据集，最后可选地对**最终**的 action 列生成样条 sidecar。
+
+```bash
+pip install -e ".[piper]"
+spline-preprocess-piper --config examples/piper_preprocess.json --dry-run
+spline-preprocess-piper --config examples/piper_preprocess.json
+spline-preprocess-piper --raw-root DATA/classify_blocks --setup state-abs-ee \
+  --output-root outputs/piper --cameras hand --spline --spline-mode adaptive_left
+```
+
+命令行参数覆盖配置文件，并保留 `scripts/legacy_piper/preprocess_piper.py` 的参数名和默认值。只会
+打开、要求并用于计算时间重叠的是被选中的相机；增量 action 携带 t+1 的绝对夹爪测量值；
+没有下一目标的最后一行会被丢弃。数据集额外包含 LeRobot v2.1 读取器需要的
+`meta/episodes_stats.jsonl`，以及原始样本索引、时间戳和清理指标。样条拟合把四元数分量当作
+独立标量，解码后的四元数一般不是单位长度，需要重新归一化。详见
+[`docs/preprocessing_integration.md`](docs/preprocessing_integration.md)。
+
 ## 节点插入和分段
 
 ```python
 from spline_encoder import extract_interval, insert_knot, subdivide
 
 spline = result.scipy_spline()
-refined = insert_knot(spline, value=0.5)
+refined = insert_knot(spline, value=0.5).spline   # KnotInsertion(.spline, .matrix)
 left, right = subdivide(spline, value=0.5)
 local = extract_interval(spline, left=0.2, right=0.8)
 ```
 
 Boehm 节点插入会在浮点误差范围内保持曲线，但不会保留量化 token 布局。
+`extract_interval()` 返回零起点样条，两端重数均为 `degree + 1`，即使端点与输入的开放
+边界重合（例如 `uniform_left` 的右端）。`extract_left_clamped_prefix()` 返回 `k` 个
+control/duration 对；degree 为 `p` 时前 `k - p` 个 span 与源曲线完全一致，最后一个
+duration 只影响右侧 support。输入可以是左端 clamped 或左端开放，但保留窗口内部的重复
+节点会被拒绝，因为每个控制点一个 duration 无法表示它们。
 `subdivide_parameters(result, step=...)` 面向 double-clamped 结果，并有意丢弃 token。
-不应假设它能保留所有 left/adaptive duration metadata 语义。
+不应假设它能保留所有 left/adaptive duration metadata 语义。inclusive 布局
+（`span_length_steps=None`）最后一个合法切分点是 `executable_steps - 2`。
 
 ## 验证与可视化
 
@@ -1050,8 +1262,9 @@ report = verify_reconstruction(
 )
 ```
 
-验证内容包括节点/控制点数量、节点单调性、零起点、左端 clamping、定义域覆盖、
-partition of unity、有限解码和 duration/knot round-trip。
+验证内容包括节点/控制点数量、节点单调性、零起点、左端 clamping、原生采样与完整
+horizon 的定义域覆盖（`executable_horizon_inside_domain`）、partition of unity、有限
+解码和 duration/knot round-trip。长度错误的 `duration_steps` 会报告为检查失败。
 
 如果省略 `max_absolute_error`，`passed` 只代表结构不变量通过，**不代表**重建精度满足
 实际任务。
@@ -1083,13 +1296,31 @@ python scripts/verify_chunk.py action_window.npy \
 输入必须严格匹配 `(input_chunk_size, action_dim)`。不提供 `--max-error` 时只报告
 指标，不设置任务精度阈值。
 
+确定性的纯 CPU 可视化验证（约 3 秒，需要 `visualization` extra）：
+
+```bash
+python scripts/visual_verification.py --output-dir docs/figures
+```
+
+输出四种拟合流程的重建/拟合误差图、二维轨迹、带边界放大的 suffix-to-prefix transfer
+叠加图、切分点两侧的位置/速度/加速度对比、量化误差对比，以及
+`visual_verification_metrics.json`。图中标出节点、切分时刻、committed interval、单位，
+以及 executable 与右侧 support 区域；拟合误差、transfer 误差和量化误差分开绘制。任何
+数值检查失败时命令返回非零。
+
 ## 测试证据
 
 ```bash
 conda run -n starVLA python -m pytest -q
+PYTHONPATH=src python -m pytest -q   # editable install 指向其他 checkout 时
 ```
 
-2026-09-15 最近一次本地结果：
+2026-10-15 审查结果（详见 [`docs/implementation_review.md`](docs/implementation_review.md)）：
+172 个测试通过，2 个因数学上不适用而跳过（加入 Piper 预处理测试后共 382 个通过、2 个跳过）；Piper dRTCv2 parity 重跑仍为零 mismatch；
+546 个 encoder 输出数组与审查前 commit `5aede68` 逐位一致
+（`scripts/compare_output_snapshots.py`）。
+
+2026-09-15 较早的本地结果：
 
 - 71 个 BSplineEncoder 测试通过；
 - 9 个上层 StarVLA B-spline 训练/部署 contract 测试通过；
@@ -1121,19 +1352,30 @@ artifact 兼容性或对未知数据的效果。项目目前没有公开的大�
 ## 目录结构
 
 ```text
-src/spline_encoder/
-├── adaptive.py       # adaptive FITPACK 拟合
-├── config.py         # 配置与 preset
-├── encoder.py        # observation-aligned encoder
-├── fitting.py        # 独立控制点拟合
-├── lerobot.py        # 数据集输入输出
-├── quantization.py   # 标量量化
-├── result.py         # 结果 dataclass
-├── serialization.py # JSON state
-├── subdivision.py    # 节点插入/分段
-├── verification.py  # 数值报告
-└── visualization.py # 可选绘图
+src/
+├── spline_encoder/          # B-spline representation; no dataset/video dependencies
+│   ├── core/                # adaptive.py, fitting.py, subdivision.py
+│   ├── encoding/            # config.py, encoder.py, result.py, quantization.py, serialization.py
+│   ├── tools/               # verification.py, visualization.py (matplotlib optional)
+│   ├── cli.py, lerobot.py   # compatibility aliases for data.splines.{cli,lerobot}
+│   ├── __init__.py          # public API (unchanged) + aliases for the old module paths
+│   └── __main__.py          # python -m spline_encoder == spline-encode
+└── data/                    # robot data processing; may import spline_encoder
+    ├── conversion/          # raw.py, media.py, episode.py, export.py (raw Piper -> LeRobot v2.1)
+    ├── transforms/          # spaces.py (quaternions, deltas, layouts, units), cleanup.py (idle)
+    ├── validation/          # dataset.py (raw vs dataset), sidecar.py (decode vs actions)
+    ├── splines/             # lerobot.py (LeRobot action I/O), sidecar.py, cli.py (spline-encode)
+    ├── config.py, pipeline.py, cli.py, __main__.py   # spline-preprocess-piper / python -m data
+scripts/                     # verification/benchmark CLIs; legacy_piper/ = original Piper scripts
+tests/  examples/  docs/
 ```
+
+`spline_encoder` 负责样条表示：节点、拟合、分段、编码器、量化、序列化与验证；其
+`core`、`encoding`、`tools` 不依赖 `data`、OpenCV、pandas 或 PyArrow。`data` 负责原始
+Piper 数据转换、state/action/observation 变换与静止段清理、LeRobot 读写、数据集验证和
+数据集到样条 sidecar 的编排。依赖方向为 `data` → `spline_encoder`；反向只有懒加载的兼容
+别名。旧模块路径（`spline_encoder.fitting`、`.encoder`、`.lerobot`、`.cli` 等）仍可导入，
+并指向同一模块对象；原始脚本已原样移至 `scripts/legacy_piper/`。完整的新旧模块对照见英文部分。
 
 ## License
 

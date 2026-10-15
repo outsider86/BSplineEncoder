@@ -1,6 +1,16 @@
-"""SplineEncoder: continuous-first action B-splines for robotics datasets."""
+"""SplineEncoder: continuous-first action B-splines for robotics datasets.
 
-from .config import (
+Layout: ``core`` (knots, fitting, adaptive fitting, subdivision), ``encoding``
+(configs, encoders, results, quantization, serialization) and ``tools``
+(verification, visualization).  None of them imports dataset or video
+dependencies.  LeRobot dataset I/O lives in the sibling ``data`` package; its
+historical names below are re-exported lazily on first access.
+"""
+
+import importlib
+import sys
+
+from .encoding.config import (
     ADAPTIVE_MODES,
     ENCODER_MODES,
     UNIFORM_MODES,
@@ -15,7 +25,7 @@ from .config import (
     is_uniform_mode,
     preset,
 )
-from .encoder import (
+from .encoding.encoder import (
     AdaptiveBSplineEncoder,
     AdaptiveLeftBSplineEncoder,
     BaseSplineEncoder,
@@ -25,7 +35,7 @@ from .encoder import (
     create_encoder,
     encode_action_chunk,
 )
-from .fitting import (
+from .core.fitting import (
     BSplineControlPointFit,
     bspline_design_matrix,
     evaluate_bspline,
@@ -36,19 +46,8 @@ from .fitting import (
     make_uniform_clamped_knots,
     make_uniform_left_clamped_knots,
 )
-from .lerobot import (
-    ActionAlignment,
-    DatasetEncodingResult,
-    EncodedEpisode,
-    LeRobotEpisode,
-    calibrate_from_lerobot,
-    encode_lerobot_dataset,
-    infer_action_bounds,
-    iter_encoded_episodes,
-    load_lerobot_episodes,
-)
-from .result import SplineGeometry, SplineParameters
-from .serialization import (
+from .encoding.result import SplineGeometry, SplineParameters
+from .encoding.serialization import (
     ENCODER_STATE_SCHEMA_VERSION,
     encoder_from_state,
     encoder_to_state,
@@ -57,22 +56,53 @@ from .serialization import (
     save_encoder,
     save_tokenizer,
 )
-from .subdivision import (
+from .core.subdivision import (
     extract_interval,
     extract_left_clamped_prefix,
     insert_knot,
     subdivide,
     subdivide_parameters,
 )
-from .verification import (
+from .tools.verification import (
     ReconstructionMetrics,
     reconstruction_metrics,
     verify_reconstruction,
     verify_spline_parameters,
 )
-from .visualization import plot_reconstruction, save_reconstruction_plot
+from .tools.visualization import plot_reconstruction, save_reconstruction_plot
 
 __version__ = "0.1.0"
+
+# Compatibility: the pre-reorganization module paths (``spline_encoder.fitting``
+# etc.) resolve to the SAME module objects as their canonical locations.
+_MODULE_ALIASES = {
+    "adaptive": "core.adaptive", "fitting": "core.fitting", "subdivision": "core.subdivision",
+    "config": "encoding.config", "encoder": "encoding.encoder", "result": "encoding.result",
+    "quantization": "encoding.quantization", "serialization": "encoding.serialization",
+    "verification": "tools.verification", "visualization": "tools.visualization",
+}
+for _old, _new in _MODULE_ALIASES.items():
+    _module = importlib.import_module(f"{__name__}.{_new}")
+    sys.modules[f"{__name__}.{_old}"] = _module
+    globals()[_old] = _module
+del _old, _new, _module
+
+# LeRobot dataset I/O moved to ``data.splines.lerobot``; resolved on first use
+# so importing spline_encoder never imports the data package.
+_LEROBOT_NAMES = frozenset({
+    "ActionAlignment", "DatasetEncodingResult", "EncodedEpisode", "LeRobotEpisode",
+    "calibrate_from_lerobot", "encode_lerobot_dataset", "infer_action_bounds",
+    "iter_encoded_episodes", "load_lerobot_episodes",
+})
+
+
+def __getattr__(name: str):
+    if name in _LEROBOT_NAMES:
+        value = getattr(importlib.import_module("data.splines.lerobot"), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "ADAPTIVE_MODES", "ENCODER_MODES", "ENCODER_STATE_SCHEMA_VERSION",

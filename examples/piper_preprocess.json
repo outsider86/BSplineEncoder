@@ -1,0 +1,25 @@
+{
+  "raw_root": "DATA/classify_blocks",
+  "output_root": "outputs/piper",
+  "setups": ["state-delta-joint"],
+  "cameras": {
+    "global": "observation.images.global",
+    "hand": "observation.images.hand"
+  },
+  "run": {
+    "fps": 30.0,
+    "cleanup": true,
+    "cleanup_motion": "auto",
+    "min_remaining_seconds": 2.0
+  },
+  "spline": {
+    "enabled": true,
+    "mode": "uniform_left",
+    "chunk_size": 16,
+    "degree": 3,
+    "num_basis": 11,
+    "span_length_steps": 2,
+    "validation_episodes": 5
+  },
+  "jobs": 16
+}

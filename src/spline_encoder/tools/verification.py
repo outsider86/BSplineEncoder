@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 from scipy.interpolate import BSpline
 
-from .result import SplineParameters
+from ..encoding.result import SplineParameters
 
 
 @dataclass(frozen=True)
@@ -98,6 +98,15 @@ def verify_spline_parameters(
         extrapolate=False,
     )(native_times)
 
+    # Endpoint-exclusive results claim the half-open horizon
+    # [0, executable_steps * sample_period); inclusive layouts end on the last
+    # native sample.  decode(samples=...) resamples this whole horizon.
+    horizon_end = (
+        native_times[-1]
+        if parameters.metadata.get("inclusive_domain", False)
+        else parameters.executable_steps * parameters.sample_period
+    )
+
     checks = {
         "knot_control_cardinality": len(knots) == len(controls) + degree + 1,
         "nondecreasing_knots": bool(np.all(np.diff(knots) >= 0)),
@@ -105,6 +114,9 @@ def verify_spline_parameters(
         "executable_samples_inside_domain": bool(
             native_times[0] >= domain_start - absolute_tolerance
             and native_times[-1] <= domain_end + absolute_tolerance
+        ),
+        "executable_horizon_inside_domain": bool(
+            horizon_end <= domain_end + absolute_tolerance
         ),
         "left_clamped": int(np.count_nonzero(np.isclose(
             knots, domain_start, rtol=0.0, atol=absolute_tolerance
@@ -121,12 +133,16 @@ def verify_spline_parameters(
     if parameters.duration_steps is not None:
         distinct_steps = np.r_[0, np.cumsum(parameters.duration_steps)]
         duration_knots = np.r_[np.zeros(degree + 1), distinct_steps[1:]]
-        duration_round_trip = bool(np.allclose(
-            duration_knots,
-            parameters.knot_steps,
-            rtol=0.0,
-            atol=absolute_tolerance,
-        ))
+        # A wrong-length duration vector is a failed check, not a crash.
+        duration_round_trip = bool(
+            duration_knots.shape == parameters.knot_steps.shape
+            and np.allclose(
+                duration_knots,
+                parameters.knot_steps,
+                rtol=0.0,
+                atol=absolute_tolerance,
+            )
+        )
         checks["duration_knot_round_trip"] = duration_round_trip
 
     return {

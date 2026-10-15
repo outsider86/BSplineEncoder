@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.interpolate import BSpline
 
-from .result import SplineParameters
+if TYPE_CHECKING:  # result objects live in encoding; core never imports it eagerly
+    from ..encoding.result import SplineParameters
 
 
 @dataclass(frozen=True)
@@ -45,17 +47,30 @@ def knot_multiplicity(knots: np.ndarray, value: float) -> int:
 
 def insert_knot_once(spline: BSpline, value: float) -> KnotInsertion:
     knots = np.asarray(spline.t, dtype=np.float64)
-    controls = np.asarray(spline.c, dtype=np.float64)
     degree = int(spline.k)
     start, end = float(knots[degree]), float(knots[-degree - 1])
     if not start < value < end:
         raise ValueError(f"knot insertion value must lie inside ({start}, {end})")
-    multiplicity = knot_multiplicity(knots, value)
-    if multiplicity >= degree:
+    if knot_multiplicity(knots, value) >= degree:
         raise ValueError("interior knot multiplicity must be below the degree")
+    return _boehm_insert(spline, value)
 
+
+def _boehm_insert(spline: BSpline, value: float) -> KnotInsertion:
+    """Insert one knot anywhere in the closed base interval ``[t[k], t[n]]``.
+
+    For interior values this is arithmetically identical to the historical
+    :func:`insert_knot_once`.  At the right domain end of a right-open knot
+    vector the active span is the last base span, and only copies of
+    ``value`` inside that span's knot prefix count toward the multiplicity.
+    """
+
+    knots = np.asarray(spline.t, dtype=np.float64)
+    controls = np.asarray(spline.c, dtype=np.float64)
+    degree = int(spline.k)
     count = controls.shape[0]
-    span = int(np.searchsorted(knots, value, side="right") - 1)
+    span = min(int(np.searchsorted(knots, value, side="right") - 1), count - 1)
+    multiplicity = knot_multiplicity(knots[: span + 1], value)
     matrix = np.zeros((count + 1, count), dtype=np.float64)
     first_blended = span - degree + 1
     last_blended = span - multiplicity
@@ -122,6 +137,33 @@ def subdivide(spline: BSpline, value: float) -> tuple[BSpline, BSpline]:
     return left, right
 
 
+def _clamped_piece(spline: BSpline, value: float, side: str) -> BSpline:
+    """Return the exact piece on one ``side`` of ``value``, clamped at ``value``.
+
+    Unlike :func:`subdivide`, ``value`` may equal a base-domain endpoint.  This
+    clamps open (non-repeated) boundary knots, for example the right end of a
+    left-clamped/right-open action spline.  An already clamped boundary is
+    returned with identical knots and controls.
+    """
+
+    degree = int(spline.k)
+    refined = spline
+    while knot_multiplicity(refined.t, value) < degree:
+        refined = _boehm_insert(refined, value).spline
+    knots = np.asarray(refined.t, dtype=np.float64)
+    controls = np.asarray(refined.c, dtype=np.float64)
+    hits = np.flatnonzero(knots == value)
+    if side == "right":
+        last = int(hits[-1])
+        piece_knots = np.concatenate((np.repeat(value, degree + 1), knots[last + 1 :]))
+        piece_controls = controls[last - degree :]
+    else:
+        first = int(hits[0])
+        piece_knots = np.concatenate((knots[:first], np.repeat(value, degree + 1)))
+        piece_controls = controls[:first]
+    return BSpline(piece_knots, piece_controls, degree, extrapolate=False, axis=0)
+
+
 def _local_support_spline(spline: BSpline, left: float, right: float) -> BSpline:
     knots = np.asarray(spline.t, dtype=np.float64)
     controls = np.asarray(spline.c, dtype=np.float64)
@@ -145,7 +187,12 @@ def _local_support_spline(spline: BSpline, left: float, right: float) -> BSpline
 
 
 def extract_interval(spline: BSpline, left: float, right: float) -> BSpline:
-    """Extract and zero-origin an exact double-clamped interval."""
+    """Extract and zero-origin an exact double-clamped interval.
+
+    Both returned boundaries have multiplicity ``degree + 1`` even when
+    ``left``/``right`` coincide with an open (unclamped) end of the input
+    knot vector.
+    """
 
     knots = np.asarray(spline.t, dtype=np.float64)
     degree = int(spline.k)
@@ -155,9 +202,13 @@ def extract_interval(spline: BSpline, left: float, right: float) -> BSpline:
     retained = _local_support_spline(spline, left, right)
     if left > start:
         _, retained = subdivide(retained, left)
+    else:
+        retained = _clamped_piece(retained, left, "right")
     retained_end = float(retained.t[-degree - 1])
     if right < retained_end:
         retained, _ = subdivide(retained, right)
+    else:
+        retained = _clamped_piece(retained, right, "left")
     return BSpline(
         np.asarray(retained.t, dtype=np.float64) - left,
         np.asarray(retained.c, dtype=np.float64).copy(),
@@ -173,7 +224,12 @@ def extract_left_clamped_prefix(
     *,
     num_knot_spans: int,
 ) -> LeftClampedPrefix:
-    """Subdivide at ``left`` and retain fixed-size causal right context."""
+    """Subdivide at ``left`` and retain fixed-size causal right context.
+
+    The input may be clamped or open at its left domain end.  Knots strictly
+    between ``left`` and the last retained break must be simple: one
+    control-duration pair per span cannot represent a repeated interior knot.
+    """
 
     degree = int(spline.k)
     if num_knot_spans <= degree:
@@ -188,9 +244,17 @@ def extract_left_clamped_prefix(
     if final_break >= len(breaks):
         raise ValueError("not enough future knot spans")
     support_right = float(breaks[final_break])
+    interior = knots[(knots > left) & (knots < support_right)]
+    if len(np.unique(interior)) != len(interior):
+        raise ValueError(
+            "left-clamped prefixes require simple knots between left and the "
+            "retained support; repeated interior knots are unsupported"
+        )
     retained = _local_support_spline(spline, left, support_right)
     if left > float(retained.t[degree]):
         _, retained = subdivide(retained, left)
+    else:
+        retained = _clamped_piece(retained, left, "right")
     controls = np.asarray(retained.c, dtype=np.float64)
     if len(controls) < num_knot_spans:
         raise RuntimeError("left subdivision returned too few controls")
@@ -215,10 +279,24 @@ def subdivide_parameters(
     geometry; both returned objects remain lossless continuous splines.
     """
 
-    if step <= 0 or step >= parameters.executable_steps:
-        raise ValueError("step must be strictly inside the executable horizon")
+    from ..encoding.result import SplineParameters
+
+    spline = parameters.scipy_spline()
     split_time = step * parameters.sample_period
-    left, right = subdivide(parameters.scipy_spline(), split_time)
+    start, end = float(spline.t[spline.k]), float(spline.t[parameters.num_basis])
+    # With inclusive_domain the last native sample sits on the domain end, so
+    # the final step is not an interior split point.
+    if (
+        step <= 0
+        or step >= parameters.executable_steps
+        or not start < split_time < end
+    ):
+        raise ValueError("step must be strictly inside the executable horizon")
+    left, right = subdivide(spline, split_time)
+    left_metadata = {**parameters.metadata, "subdivision": "left", "split_step": step}
+    if left_metadata.get("boundary_condition") == "left_clamped_right_open":
+        # Subdivision clamps the cut, so the left piece is double-clamped.
+        left_metadata["boundary_condition"] = "double_clamped"
     left_result = SplineParameters(
         control_points=np.asarray(left.c),
         knots=np.asarray(left.t),
@@ -227,11 +305,21 @@ def subdivide_parameters(
         executable_steps=step,
         tokenizer_id=parameters.tokenizer_id,
         observation_index=parameters.observation_index,
-        metadata={**parameters.metadata, "subdivision": "left", "split_step": step},
+        metadata=left_metadata,
     )
+    right_knots = np.asarray(right.t, dtype=np.float64) - split_time
+    if parameters.metadata.get("inclusive_domain", False):
+        # Inclusive layouts sample the domain end itself.  ``end - split_time``
+        # can round one ulp below ``(steps - 1) * sample_period``, which made
+        # the right child's final native sample decode to NaN.
+        horizon = (parameters.executable_steps - step - 1) * parameters.sample_period
+        at_end = np.asarray(right.t) == end
+        if np.isclose(horizon, end - split_time, rtol=0.0,
+                      atol=1e-9 * parameters.sample_period):
+            right_knots[at_end] = horizon
     right_result = SplineParameters(
         control_points=np.asarray(right.c),
-        knots=np.asarray(right.t) - split_time,
+        knots=right_knots,
         degree=right.k,
         sample_period=parameters.sample_period,
         executable_steps=parameters.executable_steps - step,

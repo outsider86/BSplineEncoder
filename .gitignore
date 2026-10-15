@@ -7,3 +7,6 @@ build/
 dist/
 .venv/
 encoded_splines/
+outputs/
+# Raw robot recordings (e.g. DATA/classify_blocks); kept local, never committed.
+DATA/
