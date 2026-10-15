@@ -5,7 +5,7 @@
 | Repository | <https://github.com/outsider86/BSplineEncoder> |
 | Reviewed commit | `5aede68cee997a2d501210ce3dfbc15144d44447` (`main`, "Expand standalone B-spline encoder API"); working tree was clean |
 | Review date | 2026-10-15 |
-| Result state | Committed on top of `5aede68` on branch `review-reorganize-piper-pipeline` and pushed to `origin` for review; not merged into `main`; no package published |
+| Result state | Committed on top of `5aede68` and fast-forwarded into `main` on `origin`; no package published |
 | Intended reader | An independent second reviewer |
 
 Passing tests do **not** establish that the implementation is error-free. This

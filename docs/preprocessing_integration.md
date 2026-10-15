@@ -6,7 +6,7 @@
 | Date | 2026-10-15 |
 | Source scripts | originally `src/data/*.py`; now byte-identical in `scripts/legacy_piper/` (legacy reference) |
 | Example raw data | `DATA/classify_blocks` (85 episodes, read-only, gitignored: not in the repository) |
-| State | Committed on branch `review-reorganize-piper-pipeline` and pushed to `origin` for review; not merged into `main`; no package published |
+| State | Committed and fast-forwarded into `main` on `origin`; no package published |
 
 ## 1. What was integrated
 
